@@ -1,5 +1,6 @@
 import comatch
 import logging
+import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('comatch').setLevel(logging.DEBUG)
@@ -106,6 +107,39 @@ if __name__ == "__main__":
         allow_many_to_many=True)
 
     print(node_matches)
+    print("splits: %d"%splits)
+    print("merges: %d"%merges)
+    print("fps   : %d"%fps)
+    print("fns   : %d"%fns)
+
+    # test edge costs
+
+    n = 100
+    nodes_x = list(range(n + 10))
+    nodes_y = list(range(n))
+    edges_xy = [
+        (i, j)
+        for i in range(n)
+        for j in range(n)
+    ]
+    edge_costs = [
+        np.linalg.norm(np.array([0, i]) - np.array([1, j]))
+        for i in range(n)
+        for j in range(n)
+    ]
+    node_labels_x = { n: 1 for n in nodes_x }
+    node_labels_y = { n: 1 for n in nodes_y }
+
+    label_matches, node_matches, splits, merges, fps, fns = comatch.match_components(
+        nodes_x, nodes_y,
+        edges_xy,
+        node_labels_x, node_labels_y,
+        edge_costs=edge_costs,
+        no_match_costs=1000)
+
+    print(node_matches)
+    for (i, j) in node_matches:
+        assert i==j
     print("splits: %d"%splits)
     print("merges: %d"%merges)
     print("fps   : %d"%fps)
