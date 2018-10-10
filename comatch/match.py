@@ -247,14 +247,16 @@ def match_components(
     objective.set_coefficient(splits, 1)
     objective.set_coefficient(merges, 1)
 
+    min_edge_cost = None
     if edge_costs is not None:
 
         edge_costs, no_match_costs = normalize_matching_costs(
             len(nodes_x), len(nodes_y),
             edge_costs,
             no_match_costs)
-
+    
         edge_costs += [ no_match_costs ]*(len(nodes_x) + len(nodes_y))
+        min_edge_cost = min(edge_costs)
 
         for edge, cost in zip(edges_xy, edge_costs):
             objective.set_coefficient(
@@ -272,6 +274,11 @@ def match_components(
     variable_types = pylp.VariableTypeMap()
     variable_types[splits] = pylp.VariableType.Integer
     variable_types[merges] = pylp.VariableType.Integer
+
+    if min_edge_cost is not None:
+        logger.debug("Set optimality gap to lowest edge cost")
+        epsilon = 10**(-4)
+        solver.set_optimality_gap(max(min_edge_cost - epsilon, 0.0), True)
 
     logger.debug("Initializing solver with %d variables", num_vars)
     solver.initialize(num_vars, pylp.VariableType.Binary, variable_types)
