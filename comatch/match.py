@@ -11,7 +11,8 @@ def match_components(
         node_labels_x, node_labels_y,
         max_edges=1,
         edge_costs=None,
-        edge_conflicts=None):
+        edge_conflicts=None,
+        no_match_cost=-0.1):
 
     '''Match nodes from X to nodes from Y by selecting candidate edges x <-> y,
     such that the split/merge error induced from the labels for X and Y is
@@ -93,6 +94,9 @@ def match_components(
             Each list in edge conflicts should contain edges_xy that are in conflict
             with each other. That is for each set of edges edge_conflicts[i] only
             one edge is picked.
+
+        no_match_cost (``(negative) float``, optional):
+            The cost for picking a no_match node.
 
     Returns:
 
@@ -234,7 +238,7 @@ def match_components(
         if not (no_match_label in label_pair):
             objective.set_quadratic_coefficient(indicator, indicator, 1)
         else:
-            objective.set_coefficient(indicator, -0.1)
+            objective.set_coefficient(indicator, no_match_cost)
     
     if edge_costs is not None:
         total_edge_costs = sum(edge_costs)
