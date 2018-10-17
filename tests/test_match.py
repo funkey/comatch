@@ -1,5 +1,5 @@
 import comatch
-import logging
+#import logging
 import numpy as np
 
 logging.basicConfig(level=logging.INFO)
@@ -104,7 +104,7 @@ if __name__ == "__main__":
         nodes_x, nodes_y,
         edges_xy,
         node_labels_x, node_labels_y,
-        allow_many_to_many=True)
+        max_edges=3)
 
     print(node_matches)
     print("splits: %d"%splits)
@@ -134,8 +134,7 @@ if __name__ == "__main__":
         nodes_x, nodes_y,
         edges_xy,
         node_labels_x, node_labels_y,
-        edge_costs=edge_costs,
-        no_match_costs=1000)
+        edge_costs=edge_costs)
 
     print(node_matches)
     for (i, j) in node_matches:

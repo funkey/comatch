@@ -4,13 +4,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 def match_components(
         nodes_x, nodes_y,
         edges_xy,
         node_labels_x, node_labels_y,
-        allow_many_to_many=False,
+        max_edges=1,
         edge_costs=None,
-        no_match_costs=0):
+        edge_conflicts=None):
+
     '''Match nodes from X to nodes from Y by selecting candidate edges x <-> y,
     such that the split/merge error induced from the labels for X and Y is
     minimized.
@@ -67,10 +69,10 @@ def match_components(
 
             A dictionary from IDs to labels.
 
-        allow_many_to_many (``bool``, optional):
+        max_edges (``int``, optional):
 
-            If ``True``, allow that one node in X can match to multiple nodes
-            in Y and vice versa. Default is ``False``.
+            If >1, allow that one node in X can match to multiple nodes
+            in Y and vice versa and maximally to max_edges other nodes. Default is ``1``.
 
         edge_costs (array-like of ``float``, optional):
 
@@ -87,10 +89,10 @@ def match_components(
 
             See also ``no_match_costs``.
 
-        no_match_costs (``float``, optional):
-
-            A cost for not matching a node either in X or Y. Complementary to
-            ``edge_costs``.
+        edge_conflicts (``list of lists of tuples/edges (id_x, id_y)``, optional):
+            Each list in edge conflicts should contain edges_xy that are in conflict
+            with each other. That is for each set of edges edge_conflicts[i] only
+            one edge is picked.
 
     Returns:
 
@@ -107,8 +109,8 @@ def match_components(
         (unmatched in Y).
     '''
 
-    if edge_costs is None and no_match_costs != 0:
-        edge_costs = [ 0 ]*len(edges_xy)
+    if max_edges < 1:
+        raise ValueError("Max edges need to be >= 1.")
 
     num_vars = 0
 
@@ -143,9 +145,8 @@ def match_components(
         edges_by_node_x[u].append(edge)
         edges_by_node_y[v].append(edge)
 
-    # Require that each node matches to exactly one (or at least one, depending
-    # on the allow_many_to_many parameter) other node. Dummy nodes can match to
-    # any number.
+    # Require that each node matches to at least one and at most max_edges other nodes.
+    # Dummy nodes can match to any number of nodes.
 
     constraints = pylp.LinearConstraints()
 
@@ -157,18 +158,24 @@ def match_components(
             if node == no_match_node:
                 continue
 
-            constraint = pylp.LinearConstraint()
+            constraint_low = pylp.LinearConstraint()
+            constraint_high = pylp.LinearConstraint()
             for edge in edges_by_node[node]:
-                constraint.set_coefficient(edge_indicators[edge], 1)
-            if allow_many_to_many:
-                constraint.set_relation(pylp.Relation.GreaterEqual)
-            else:
-                constraint.set_relation(pylp.Relation.Equal)
-            constraint.set_value(1)
-            constraints.add(constraint)
+                constraint_low.set_coefficient(edge_indicators[edge], 1)
+                constraint_high.set_coefficient(edge_indicators[edge], 1)
+
+            constraint_low.set_relation(pylp.Relation.GreaterEqual)
+            constraint_low.set_value(1)
+
+            constraint_high.set_relation(pylp.Relation.LessEqual)
+            constraint_high.set_value(max_edges)
+
+            constraints.add(constraint_low)
+            constraints.add(constraint_high)
+
+
 
     # add indicators for label matches
-
     label_indicators = {}
     edges_by_label_pair = {}
 
@@ -195,19 +202,23 @@ def match_components(
         # y - sum(x1, ..., xn) <= 0
         # sum(x1, ..., xn) - n*y <= 0
 
-        constraint1 = pylp.LinearConstraint()
-        constraint2 = pylp.LinearConstraint()
-        constraint1.set_coefficient(label_indicators[label_pair], 1)
-        constraint2.set_coefficient(label_indicators[label_pair], -len(edges))
+        constraint = pylp.LinearConstraint()
+        constraint.set_coefficient(label_indicators[label_pair], 1)
         for edge in edges:
-            constraint1.set_coefficient(edge_indicators[edge], -1)
-            constraint2.set_coefficient(edge_indicators[edge], 1)
-        constraint1.set_relation(pylp.Relation.LessEqual)
-        constraint2.set_relation(pylp.Relation.LessEqual)
-        constraint1.set_value(0)
-        constraint2.set_value(0)
-        constraints.add(constraint1)
-        constraints.add(constraint2)
+            constraint.set_coefficient(edge_indicators[edge], -1)
+        constraint.set_relation(pylp.Relation.Equal)
+        constraint.set_value(0)
+        constraints.add(constraint)
+
+    if edge_conflicts is not None:
+        for conflict in edge_conflicts:
+            constraint = pylp.LinearConstraint()
+            for edge in conflict:
+                constraint.set_coefficient(edge_indicators[tuple(edge)], 1)
+
+            constraint.set_relation(pylp.Relation.LessEqual)
+            constraint.set_value(1)
+            constraints.add(constraint)
 
     # pin no-match pair indicator to 1
     constraint = pylp.LinearConstraint()
@@ -217,68 +228,35 @@ def match_components(
     constraint.set_value(1)
     constraints.add(constraint)
 
-    # add integer for splits
-    #   splits = sum of all label pair indicators - n
-    # with n number of labels in x (including no-match)
-    #   sum - splits = n
-    splits = num_vars
-    num_vars += 1
-    constraint = pylp.LinearConstraint()
-    for _, label_indicator in label_indicators.items():
-        constraint.set_coefficient(label_indicator, 1)
-    constraint.set_coefficient(splits, -1)
-    constraint.set_relation(pylp.Relation.Equal)
-    constraint.set_value(len(labels_x))
-    constraints.add(constraint)
-
-    # add integer for merges
-    merges = num_vars
-    num_vars += 1
-    constraint = pylp.LinearConstraint()
-    for _, label_indicator in label_indicators.items():
-        constraint.set_coefficient(label_indicator, 1)
-    constraint.set_coefficient(merges, -1)
-    constraint.set_relation(pylp.Relation.Equal)
-    constraint.set_value(len(labels_y))
-    constraints.add(constraint)
-
     # set objective
-    objective = pylp.LinearObjective(num_vars)
-    objective.set_coefficient(splits, 1)
-    objective.set_coefficient(merges, 1)
-
-    min_edge_cost = None
-    if edge_costs is not None:
-
-        edge_costs, no_match_costs = normalize_matching_costs(
-            len(nodes_x), len(nodes_y),
-            edge_costs,
-            no_match_costs)
+    objective = pylp.QuadraticObjective(num_vars)
+    for label_pair, indicator in label_indicators.items():
+        if not (no_match_label in label_pair):
+            objective.set_quadratic_coefficient(indicator, indicator, 1)
+        else:
+            objective.set_coefficient(indicator, -0.1)
     
-        edge_costs += [ no_match_costs ]*(len(nodes_x) + len(nodes_y))
-        min_edge_cost = min(edge_costs)
-
+    if edge_costs is not None:
+        total_edge_costs = sum(edge_costs)
+        edge_costs = [c/total_edge_costs for c in edge_costs]
         for edge, cost in zip(edges_xy, edge_costs):
-            objective.set_coefficient(
-                edge_indicators[edge],
-                cost)
+            objective.set_coefficient(edge_indicators[edge], -cost)
+    
+    objective.set_sense(pylp.Sense.Maximize)
 
     # solve
-
     logger.debug("Added %d constraints", len(constraints))
     for i in range(len(constraints)):
         logger.debug(constraints[i])
 
-    logger.debug("Creating linear solver")
-    solver = pylp.create_linear_solver(pylp.Preference.Any)
+    logger.debug("Creating quadratic solver")
+    solver = pylp.create_quadratic_solver(pylp.Preference.Any)
     variable_types = pylp.VariableTypeMap()
-    variable_types[splits] = pylp.VariableType.Integer
-    variable_types[merges] = pylp.VariableType.Integer
+    for label_pair, indicator in label_indicators.items():
+        variable_types[indicator] = pylp.VariableType.Integer
 
-    if min_edge_cost is not None:
-        logger.debug("Set optimality gap to lowest edge cost")
-        epsilon = 10**(-4)
-        solver.set_optimality_gap(max(min_edge_cost - epsilon, 0.0), True)
+
+    solver.set_optimality_gap(0.0, True)
 
     logger.debug("Initializing solver with %d variables", num_vars)
     solver.initialize(num_vars, pylp.VariableType.Binary, variable_types)
@@ -297,54 +275,40 @@ def match_components(
         raise RuntimeError("No optimal solution found...")
 
     # get label matches
-
+    total_value = 0
     label_matches = []
     for label_pair, label_indicator in label_indicators.items():
-        if no_match_node not in label_pair:
+        if True:
             if solution[label_indicator] > 0.5:
                 label_matches.append(label_pair)
 
     # get node matches
-
     node_matches = [
         e
         for e in edges_xy
         if solution[edge_indicators[e]] > 0.5 and no_match_node not in e
     ]
 
-    # get error counts
 
-    num_splits = solution[splits]
-    num_merges = solution[merges]
-    num_fps = 0
-    num_fns = 0
+    # get macroscopic errors counts
+    print "labels_x", labels_x
+    print "labels_y", labels_y
+    print "label_matches", label_matches
+    splits = len(label_matches) - len(labels_x)
+    merges = len(label_matches) - len(labels_y)
+
+    fps = 0
+    fns = 0
     for label_pair, label_indicator in label_indicators.items():
         if label_pair[0] == no_match_label:
-            num_fps += solution[label_indicator]
+            fps += (solution[label_indicator] > 0.5)
         if label_pair[1] == no_match_label:
-            num_fns += solution[label_indicator]
-    num_fps -= 1
-    num_fns -= 1
-    num_splits -= num_fps
-    num_merges -= num_fns
+            fns += (solution[label_indicator] > 0.5)
 
-    return (label_matches, node_matches, num_splits, num_merges, num_fps, num_fns)
+    fps -= 1
+    fns -= 1
 
-def normalize_matching_costs(
-        num_nodes_x, num_nodes_y,
-        edge_costs,
-        no_match_costs):
-    '''Scale the edge costs and no-match costs such that they do not exceed 1
-    in the worst case. This is to ensure that the ILP first minimizes
-    topological errors, then matching costs.'''
+    splits -= fps
+    merges -= fns
 
-    # the sum of all edge costs is an upper bound on the actual edge costs
-    total_edge_costs = (
-        sum(edge_costs) +
-        (num_nodes_x + num_nodes_y)*no_match_costs
-    )
-
-    edge_costs = [ c/total_edge_costs for c in edge_costs ]
-    no_match_costs /= total_edge_costs
-
-    return edge_costs, no_match_costs
+    return (label_matches, node_matches, splits, merges, fps, fns)
