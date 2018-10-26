@@ -12,7 +12,8 @@ def match_components(
         max_edges=1,
         edge_costs=None,
         edge_conflicts=None,
-        no_match_cost=-0.1):
+        no_match_cost=-0.1,
+        optimality_gap=0.0):
 
     '''Match nodes from X to nodes from Y by selecting candidate edges x <-> y,
     such that the split/merge error induced from the labels for X and Y is
@@ -260,7 +261,7 @@ def match_components(
         variable_types[indicator] = pylp.VariableType.Integer
 
 
-    solver.set_optimality_gap(0.0, True)
+    solver.set_optimality_gap(optimality_gap, True)
 
     logger.debug("Initializing solver with %d variables", num_vars)
     solver.initialize(num_vars, pylp.VariableType.Binary, variable_types)
