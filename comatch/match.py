@@ -9,6 +9,8 @@ def match_components(
         nodes_x, nodes_y,
         edges_xy,
         node_labels_x, node_labels_y,
+        edge_conflicts=None,
+        max_edges=None,
         optimality_gap=0.0,
         time_limit=None):
 
@@ -116,10 +118,10 @@ def match_components(
         edges_by_node_x[u].append(edge)
         edges_by_node_y[v].append(edge)
 
-    # Require that each node matches to exactly one other node
+    # Require that each node matches to 1<=n<=max_edges
 
     constraints = pylp.LinearConstraints()
-
+    conflicts = []
     for nodes, edges_by_node in zip(
             [nodes_x, nodes_y], [edges_by_node_x, edges_by_node_y]):
 
@@ -128,13 +130,37 @@ def match_components(
             if node == no_match_node:
                 continue
 
-            constraint = pylp.LinearConstraint()
+            constraint_low = pylp.LinearConstraint()
+            constraint_high = pylp.LinearConstraint()
+    
             for edge in edges_by_node[node]:
-                constraint.set_coefficient(edge_indicators[edge], 1)
+                constraint_low.set_coefficient(edge_indicators[edge], 1)
+                constraint_high.set_coefficient(edge_indicators[edge], 1)
 
-            constraint.set_relation(pylp.Relation.Equal)
-            constraint.set_value(1)
-            constraints.add(constraint)
+                if not no_match_node in edge:
+                    conflict = pylp.LinearConstraint()
+                    conflict.set_coefficient(edge_indicators[edge], 1)
+
+                    potential_conflict = tuple([edge[0], no_match_node])
+                    if not potential_conflict in conflicts:
+                        conflict_edge = potential_conflict
+                    else:
+                        conflict_edge = tuple([no_match_node, edge[1]]) 
+
+                    conflicts.append(conflict_edge)                
+                    conflict.set_coefficient(edge_indicators[conflict_edge], 1)
+                    conflict.set_relation(pylp.Relation.LessEqual)
+                    conflict.set_value(1)
+                    constraints.add(conflict)
+
+            constraint_low.set_relation(pylp.Relation.GreaterEqual)
+            constraint_low.set_value(1)
+            constraints.add(constraint_low)
+
+            if max_edges is not None:
+                constraint_high.set_relation(pylp.Relation.LessEqual)
+                constraint_high.set_value(max_edges)
+                constraints.add(constraint_high)
 
 
     # add indicators for label matches
@@ -189,6 +215,18 @@ def match_components(
 
         constraints.add(constraint1)
         constraints.add(constraint2)
+
+
+    if edge_conflicts is not None:
+        for conflict in edge_conflicts:
+            constraint = pylp.LinearConstraint()
+            for edge in conflict:
+                constraint.set_coefficient(edge_indicators[tuple(edge)], 1)
+           
+            constraint.set_relation(pylp.Relation.LessEqual)
+            constraint.set_value(1)
+            constraints.add(constraint)
+
 
     # pin binary no-match pair indicator to 1
     constraint = pylp.LinearConstraint()
@@ -257,10 +295,13 @@ def match_components(
     ]
 
 
+    for e in edges_xy:
+        if solution[edge_indicators[e]] > 0.5:
+
     # get macroscopic errors counts
-    print "labels_x", labels_x
-    print "labels_y", labels_y
-    print "label_matches", label_matches
+    print("labels_x", labels_x)
+    print("labels_y", labels_y)
+    print("label_matches", label_matches)
     splits = len(label_matches) - len(labels_x)
     merges = len(label_matches) - len(labels_y)
 
