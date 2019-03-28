@@ -9,10 +9,6 @@ def match_components(
         nodes_x, nodes_y,
         edges_xy,
         node_labels_x, node_labels_y,
-        max_edges=1,
-        edge_costs=None,
-        edge_conflicts=None,
-        no_match_cost=-0.1,
         optimality_gap=0.0,
         time_limit=None):
 
@@ -72,34 +68,6 @@ def match_components(
 
             A dictionary from IDs to labels.
 
-        max_edges (``int``, optional):
-
-            If >1, allow that one node in X can match to multiple nodes
-            in Y and vice versa and maximally to max_edges other nodes. Default is ``1``.
-
-        edge_costs (array-like of ``float``, optional):
-
-            If given, defines a preference for selecting edges from
-            ``edges_xy`` by contributing costs ``edge_costs[i]`` for edge
-            ``edges_xy[i]``.
-
-            The edge costs form a secondary objective, i.e., the matching is
-            still performed to minimize the total number of errors (splits,
-            merges, FPs, and FNs). However, for matching problems where several
-            solutions exist with the same number of errors, the edge costs
-            define a preference (e.g., by favouring matches between nodes that
-            are spatially close, if the edge costs represent distances).
-
-            See also ``no_match_costs``.
-
-        edge_conflicts (``list of lists of tuples/edges (id_x, id_y)``, optional):
-            Each list in edge conflicts should contain edges_xy that are in conflict
-            with each other. That is for each set of edges edge_conflicts[i] only
-            one edge is picked.
-
-        no_match_cost (``(negative) float``, optional):
-            The cost for picking a no_match node.
-
     Returns:
 
         (label_matches, node_matches, num_splits, num_merges, num_fps, num_fns)
@@ -114,9 +82,6 @@ def match_components(
         merges, false positives (unmatched in X), and false negatives
         (unmatched in Y).
     '''
-
-    if max_edges < 1:
-        raise ValueError("Max edges need to be >= 1.")
 
     num_vars = 0
 
@@ -151,8 +116,7 @@ def match_components(
         edges_by_node_x[u].append(edge)
         edges_by_node_y[v].append(edge)
 
-    # Require that each node matches to at least one and at most max_edges other nodes.
-    # Dummy nodes can match to any number of nodes.
+    # Require that each node matches to exactly one other node
 
     constraints = pylp.LinearConstraints()
 
@@ -164,20 +128,13 @@ def match_components(
             if node == no_match_node:
                 continue
 
-            constraint_low = pylp.LinearConstraint()
-            constraint_high = pylp.LinearConstraint()
+            constraint = pylp.LinearConstraint()
             for edge in edges_by_node[node]:
-                constraint_low.set_coefficient(edge_indicators[edge], 1)
-                constraint_high.set_coefficient(edge_indicators[edge], 1)
+                constraint.set_coefficient(edge_indicators[edge], 1)
 
-            constraint_low.set_relation(pylp.Relation.GreaterEqual)
-            constraint_low.set_value(1)
-
-            constraint_high.set_relation(pylp.Relation.LessEqual)
-            constraint_high.set_value(max_edges)
-
-            constraints.add(constraint_low)
-            constraints.add(constraint_high)
+            constraint.set_relation(pylp.Relation.Equal)
+            constraint.set_value(1)
+            constraints.add(constraint)
 
 
     # add indicators for label matches
@@ -229,6 +186,9 @@ def match_components(
             constraint2.set_coefficient(label_indicator, -1)
             constraint2.set_relation(pylp.Relation.GreaterEqual)
             constraint2.set_value(0)
+
+        constraints.add(constraint1)
+        constraints.add(constraint2)
 
     # pin binary no-match pair indicator to 1
     constraint = pylp.LinearConstraint()
@@ -298,9 +258,9 @@ def match_components(
 
 
     # get macroscopic errors counts
-    print("labels_x", labels_x)
-    print("labels_y", labels_y)
-    print("label_matches", label_matches)
+    print "labels_x", labels_x
+    print "labels_y", labels_y
+    print "label_matches", label_matches
     splits = len(label_matches) - len(labels_x)
     merges = len(label_matches) - len(labels_y)
 
