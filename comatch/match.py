@@ -180,10 +180,10 @@ def match_components(
             constraints.add(constraint_high)
 
 
-
     # add indicators for label matches
     label_indicators = {}
     edges_by_label_pair = {}
+    binary_label_indicators = {}
 
     for edge in edges_xy:
 
@@ -192,6 +192,8 @@ def match_components(
         if label_pair not in label_indicators:
             label_indicators[label_pair] = num_vars
             num_vars += 1
+            binary_label_indicators[label_pair] = num_vars
+            num_vars += 1
 
         if label_pair not in edges_by_label_pair:
             edges_by_label_pair[label_pair] = []
@@ -199,15 +201,11 @@ def match_components(
 
     label_indicators[(no_match_label, no_match_label)] = num_vars
     num_vars += 1
+    binary_label_indicators[(no_match_label, no_match_label)] = num_vars
+    num_vars += 1
 
-    # couple label indicators to edge indicators
+    # couple integer label indicators to edge indicators
     for label_pair, edges in edges_by_label_pair.items():
-
-        # y == 1 <==> sum(x1, ..., xn) > 0
-        #
-        # y - sum(x1, ..., xn) <= 0
-        # sum(x1, ..., xn) - n*y <= 0
-
         constraint = pylp.LinearConstraint()
         constraint.set_coefficient(label_indicators[label_pair], 1)
         for edge in edges:
@@ -216,38 +214,37 @@ def match_components(
         constraint.set_value(0)
         constraints.add(constraint)
 
-    if edge_conflicts is not None:
-        for conflict in edge_conflicts:
-            constraint = pylp.LinearConstraint()
-            for edge in conflict:
-                constraint.set_coefficient(edge_indicators[tuple(edge)], 1)
 
-            constraint.set_relation(pylp.Relation.LessEqual)
-            constraint.set_value(1)
-            constraints.add(constraint)
+    # Couple binary label indicators to integer label indicators
+    for label_pair, label_indicator in label_indicators.items():
+        constraint1 = pylp.LinearConstraint()
+        constraint1.set_coefficient(binary_label_indicators[label_pair], 1) 
+        constraint1.set_coefficient(label_indicator, -1)
+        constraint1.set_relation(pylp.Relation.LessEqual)
+        constraint1.set_value(0)
 
-    # pin no-match pair indicator to 1
+        constraint2 = pylp.LinearConstraint()
+        if not label_pair == (no_match_label, no_match_label):
+            constraint2.set_coefficient(binary_label_indicators[label_pair], len(edges_by_label_pair[label_pair]))
+            constraint2.set_coefficient(label_indicator, -1)
+            constraint2.set_relation(pylp.Relation.GreaterEqual)
+            constraint2.set_value(0)
+
+    # pin binary no-match pair indicator to 1
     constraint = pylp.LinearConstraint()
-    no_match_indicator = label_indicators[(no_match_label, no_match_label)]
+    no_match_indicator = binary_label_indicators[(no_match_label, no_match_label)]
     constraint.set_coefficient(no_match_indicator, 1)
     constraint.set_relation(pylp.Relation.Equal)
     constraint.set_value(1)
     constraints.add(constraint)
 
     # set objective
-    objective = pylp.QuadraticObjective(num_vars)
+    objective = pylp.LinearObjective(num_vars)
     for label_pair, indicator in label_indicators.items():
         if not (no_match_label in label_pair):
-            objective.set_quadratic_coefficient(indicator, indicator, 1)
-        else:
-            objective.set_coefficient(indicator, no_match_cost)
-    
-    if edge_costs is not None:
-        total_edge_costs = sum(edge_costs)
-        edge_costs = [c/total_edge_costs for c in edge_costs]
-        for edge, cost in zip(edges_xy, edge_costs):
-            objective.set_coefficient(edge_indicators[edge], -cost)
-    
+            objective.set_coefficient(indicator, len(label_indicators) + 1)
+            objective.set_coefficient(binary_label_indicators[label_pair], -1)
+
     objective.set_sense(pylp.Sense.Maximize)
 
     # solve
@@ -256,7 +253,7 @@ def match_components(
         logger.debug(constraints[i])
 
     logger.debug("Creating quadratic solver")
-    solver = pylp.create_quadratic_solver(pylp.Preference.Any)
+    solver = pylp.create_linear_solver(pylp.Preference.Any)
     variable_types = pylp.VariableTypeMap()
     for label_pair, indicator in label_indicators.items():
         variable_types[indicator] = pylp.VariableType.Integer
@@ -287,7 +284,7 @@ def match_components(
     # get label matches
     total_value = 0
     label_matches = []
-    for label_pair, label_indicator in label_indicators.items():
+    for label_pair, label_indicator in binary_label_indicators.items():
         if True:
             if solution[label_indicator] > 0.5:
                 label_matches.append(label_pair)
@@ -309,7 +306,7 @@ def match_components(
 
     fps = 0
     fns = 0
-    for label_pair, label_indicator in label_indicators.items():
+    for label_pair, label_indicator in binary_label_indicators.items():
         if label_pair[0] == no_match_label:
             fps += (solution[label_indicator] > 0.5)
         if label_pair[1] == no_match_label:
