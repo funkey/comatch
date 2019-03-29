@@ -257,7 +257,6 @@ def match_components(
         variable_types[indicator] = pylp.VariableType.Integer
 
 
-    solver.set_num_threads(1)
 
     if optimality_gap is not None:
         solver.set_optimality_gap(optimality_gap, True)
@@ -267,6 +266,7 @@ def match_components(
 
     logger.debug("Initializing solver with %d variables", num_vars)
     solver.initialize(num_vars, pylp.VariableType.Binary, variable_types)
+    solver.set_num_threads(1)
 
     logger.debug("Setting objective")
     solver.set_objective(objective)
