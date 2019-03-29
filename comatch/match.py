@@ -1,4 +1,4 @@
-from __future__ import division
+from __future__ import print_function, division
 import pylp
 import logging
 
@@ -257,6 +257,8 @@ def match_components(
         variable_types[indicator] = pylp.VariableType.Integer
 
 
+    solver.set_num_threads(1)
+
     if optimality_gap is not None:
         solver.set_optimality_gap(optimality_gap, True)
 
@@ -277,7 +279,7 @@ def match_components(
 
     logger.debug("Solver returned: %s", message)
     if 'NOT' in message:
-        raise RuntimeError("No optimal solution found...")
+        print("Suboptimal solution found.")
 
     # get label matches
     total_value = 0
@@ -293,10 +295,6 @@ def match_components(
         for e in edges_xy
         if solution[edge_indicators[e]] > 0.5 and no_match_node not in e
     ]
-
-
-    for e in edges_xy:
-        if solution[edge_indicators[e]] > 0.5:
 
     # get macroscopic errors counts
     print("labels_x", labels_x)
