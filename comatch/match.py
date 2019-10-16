@@ -297,9 +297,6 @@ def match_components(
     ]
 
     # get macroscopic errors counts
-    print("labels_x", labels_x)
-    print("labels_y", labels_y)
-    print("label_matches", label_matches)
     splits = len(label_matches) - len(labels_x)
     merges = len(label_matches) - len(labels_y)
 
