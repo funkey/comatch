@@ -4,7 +4,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 def match_components(
         nodes_x, nodes_y,
         edges_xy,
@@ -17,6 +16,42 @@ def match_components(
     '''Match nodes from X to nodes from Y by selecting candidate edges x <-> y,
     such that the split/merge error induced from the labels for X and Y is
     minimized.
+
+    There are two types of indicators, binary indicators indicating 
+    match or no match of a cc label to another cc label and 
+
+    Label indicators: One integer indicator for each combination of labels, 
+                      encoding the number of matched edges between them via:
+
+    Edge indicators: One binary indicator for each edge.
+
+    Label indicators are bound to edges via:
+    sum_{edges between labels A,B} edge_indicator(edge) - label_indicator_AB = 0
+
+    In addition to label indicators there are Binary Label Indicators in {0,1} 
+    for each combination of labels, encoding whether two cc labels are matched.
+
+    Binary Label Indicators are bound to Label Indicators via:
+
+    1. binary_label_indicator - label_indicator <= 0 
+    (Preventing the binary label to be 1 if no edge between labels A and B are matched)
+
+    and
+
+    2. binary_label_indicator * num_edges_AB - label_indicator >= 0 
+    (I.e. if all edges between cc label A and B are matched (label_indicator == num_edges_AB) the binary label indicator has to be 1)
+
+
+    Finally we maximize the objective:
+    sum_{label_pair} label_indicators[label_pair] * (num_label_indicators + 1) - binary_label_indicators[label_pair]
+    
+    This objective maximizes the total number of label matches, while minimizing the number of 
+    splits and merges. label_indicator encodes the number of edges between a label_pair, and
+    we wish to maximize that. 
+
+    At the same time we want to minimize the sum of binary_label_indicators, i.e. 
+    match as much edges as possible with the minimum number of tracks.
+
 
     Example::
 
@@ -38,23 +73,20 @@ def match_components(
 
         A      B
 
-    1-7: nodes in X labelled A; a-g: nodes in Y labelled B; h-j: nodes in Y
-    labelled C.
 
-    Assuming that all nodes in X can be matched to all nodes in Y in the same
-    line (``edges_xy`` would be (1, a), (2, b), (3, h), (3, c), and so on), the
-    solution would be to match:
+    Case 1: max_edges=1
 
-        1 - a
-        2 - b
-        3 - c
-        4 - d
-        5 - e
-        6 - f
-        7 - g
+    In this case the objective would map all nodes of A to all nodes of B 
+    and C would be a false positive. 
 
-    h, i, and j would remain unmatched, since matching them would incur a split
-    error of A into B and C.
+    Case 2: max_edges>1 or None
+    In this case evereything would be matched and A could match to both 
+    A and B. However, this is not desired behaviour often and can be remedied
+    by passing the optional edge_conflict parameter, introducing 
+    pairwise conflicts between edges that start on the same label 
+    but end on a different label. In this case multiple edges 
+    can only be used to deal with unequal number of nodes in A B 
+    and still get a full matching.
 
     Args:
 
@@ -68,7 +100,27 @@ def match_components(
 
         node_labels_x, node_labels_y (``dict``):
 
-            A dictionary from IDs to labels.
+            A dictionary from IDs to connected component labels.
+
+        edge_conflicts (list of lists of tuples):
+
+            A list of lists of tuples [[(id_x, id_y), (id_x1, id_y1), ...], ...]
+            specifying lists of edges thatr are mutually exclusive: From each 
+            list, only one edge can be chosen.
+
+        max_edges (int or None):
+
+            If specified sets the maximum number of matched edges
+            any vertex can have. If None is specified this is 
+            unbounded.
+
+        optimality_gap (float):
+
+            Sets the allowed tolerance for the ILP solver.
+
+        time_limit (int):
+
+            Time limit for the ILP solver. 
 
     Returns:
 
@@ -119,7 +171,6 @@ def match_components(
         edges_by_node_y[v].append(edge)
 
     # Require that each node matches to 1<=n<=max_edges
-
     constraints = pylp.LinearConstraints()
     conflicts = []
     for nodes, edges_by_node in zip(
@@ -197,7 +248,6 @@ def match_components(
         constraint.set_value(0)
         constraints.add(constraint)
 
-
     # Couple binary label indicators to integer label indicators
     for label_pair, label_indicator in label_indicators.items():
         constraint1 = pylp.LinearConstraint()
@@ -227,7 +277,6 @@ def match_components(
             constraint.set_value(1)
             constraints.add(constraint)
 
-
     # pin binary no-match pair indicator to 1
     constraint = pylp.LinearConstraint()
     no_match_indicator = binary_label_indicators[(no_match_label, no_match_label)]
@@ -255,8 +304,6 @@ def match_components(
     variable_types = pylp.VariableTypeMap()
     for label_pair, indicator in label_indicators.items():
         variable_types[indicator] = pylp.VariableType.Integer
-
-
 
     if optimality_gap is not None:
         solver.set_optimality_gap(optimality_gap, True)
