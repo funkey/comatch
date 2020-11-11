@@ -326,12 +326,12 @@ def match_components(
     label_matches = []
     for label_pair, label_indicator in binary_label_indicators.items():
         if True:
-            if label_indicator > 0.5:
+            if label_indicator.x > 0.5:
                 label_matches.append(label_pair)
 
     # get node matches
     node_matches = [
-        e for e in edges_xy if edge_indicators[e] > 0.5 and no_match_node not in e
+        e for e in edges_xy if edge_indicators[e].x > 0.5 and no_match_node not in e
     ]
 
     # get macroscopic errors counts
@@ -342,9 +342,9 @@ def match_components(
     fns = 0
     for label_pair, label_indicator in binary_label_indicators.items():
         if label_pair[0] == no_match_label:
-            fps += label_indicator > 0.5
+            fps += label_indicator.x > 0.5
         if label_pair[1] == no_match_label:
-            fns += label_indicator > 0.5
+            fns += label_indicator.x > 0.5
 
     fps -= 1
     fns -= 1
