@@ -1,19 +1,23 @@
 from __future__ import print_function, division
-import pylp
+import mip
 import logging
 
 logger = logging.getLogger(__name__)
 
-def match_components(
-        nodes_x, nodes_y,
-        edges_xy,
-        node_labels_x, node_labels_y,
-        edge_conflicts=None,
-        max_edges=None,
-        optimality_gap=0.0,
-        time_limit=None):
 
-    '''Match nodes from X to nodes from Y by selecting candidate edges x <-> y,
+def match_components(
+    nodes_x,
+    nodes_y,
+    edges_xy,
+    node_labels_x,
+    node_labels_y,
+    edge_conflicts=None,
+    max_edges=None,
+    optimality_gap=0.0,
+    time_limit=None,
+):
+
+    """Match nodes from X to nodes from Y by selecting candidate edges x <-> y,
     such that the split/merge error induced from the labels for X and Y is
     minimized.
 
@@ -135,7 +139,8 @@ def match_components(
         ``num_splits``, ``num_merges``, ...: The number of label splits,
         merges, false positives (unmatched in X), and false negatives
         (unmatched in Y).
-    '''
+    """
+    model = mip.Model(sense=mip.MAXIMIZE, solver_name=mip.CBC, name="comatch")
 
     num_vars = 0
 
@@ -152,16 +157,15 @@ def match_components(
     labels_y = set(node_labels_y.values())
 
     # add additional edges to dummy nodes
-    edges_xy += [ (n, no_match_node) for n in nodes_x ]
-    edges_xy += [ (no_match_node, n) for n in nodes_y ]
+    edges_xy += [(n, no_match_node) for n in nodes_x]
+    edges_xy += [(no_match_node, n) for n in nodes_y]
 
     # create indicator for each matching edge
     edge_indicators = {}
     edges_by_node_x = {}
     edges_by_node_y = {}
     for edge in edges_xy:
-        edge_indicators[edge] = num_vars
-        num_vars += 1
+        edge_indicators[edge] = model.add_var(var_type=mip.BINARY)
         u, v = edge
         if u not in edges_by_node_x:
             edges_by_node_x[u] = []
@@ -171,48 +175,41 @@ def match_components(
         edges_by_node_y[v].append(edge)
 
     # Require that each node matches to 1<=n<=max_edges
-    constraints = pylp.LinearConstraints()
     conflicts = []
     for nodes, edges_by_node in zip(
-            [nodes_x, nodes_y], [edges_by_node_x, edges_by_node_y]):
+        [nodes_x, nodes_y], [edges_by_node_x, edges_by_node_y]
+    ):
 
         for node in nodes:
 
             if node == no_match_node:
                 continue
 
-            constraint_low = pylp.LinearConstraint()
-            constraint_high = pylp.LinearConstraint()
-    
+            constraint_low_indicators = []
+            constraint_high_indicators = []
+
             for edge in edges_by_node[node]:
-                constraint_low.set_coefficient(edge_indicators[edge], 1)
-                constraint_high.set_coefficient(edge_indicators[edge], 1)
+                constraint_low_indicators.append(edge_indicators[edge])
+                constraint_high_indicators.append(edge_indicators[edge])
 
                 if not no_match_node in edge:
-                    conflict = pylp.LinearConstraint()
-                    conflict.set_coefficient(edge_indicators[edge], 1)
+                    conflict_indicators = []
+                    conflict_indicators.append(edge_indicators[edge])
 
                     potential_conflict = tuple([edge[0], no_match_node])
                     if not potential_conflict in conflicts:
                         conflict_edge = potential_conflict
                     else:
-                        conflict_edge = tuple([no_match_node, edge[1]]) 
+                        conflict_edge = tuple([no_match_node, edge[1]])
 
-                    conflicts.append(conflict_edge)                
-                    conflict.set_coefficient(edge_indicators[conflict_edge], 1)
-                    conflict.set_relation(pylp.Relation.LessEqual)
-                    conflict.set_value(1)
-                    constraints.add(conflict)
+                    conflicts.append(conflict_edge)
+                    conflict_indicators.append(edge_indicators[conflict_edge])
+                    model += mip.xsum(ind for ind in conflict_indicators) <= 1
 
-            constraint_low.set_relation(pylp.Relation.GreaterEqual)
-            constraint_low.set_value(1)
-            constraints.add(constraint_low)
+            model += mip.xsum(ind for ind in constraint_low_indicators) >= 1
 
             if max_edges is not None:
-                constraint_high.set_relation(pylp.Relation.LessEqual)
-                constraint_high.set_value(max_edges)
-                constraints.add(constraint_high)
-
+                model += mip.xsum(ind for ind in constraint_low_indicators) <= max_edges
 
     # add indicators for label matches
     label_indicators = {}
@@ -224,123 +221,117 @@ def match_components(
         label_pair = node_labels_x[edge[0]], node_labels_y[edge[1]]
 
         if label_pair not in label_indicators:
-            label_indicators[label_pair] = num_vars
-            num_vars += 1
-            binary_label_indicators[label_pair] = num_vars
-            num_vars += 1
+            label_indicators[label_pair] = model.add_var(var_type=mip.INTEGER)
+            binary_label_indicators[label_pair] = model.add_var(var_type=mip.BINARY)
 
         if label_pair not in edges_by_label_pair:
             edges_by_label_pair[label_pair] = []
         edges_by_label_pair[label_pair].append(edge)
 
-    label_indicators[(no_match_label, no_match_label)] = num_vars
-    num_vars += 1
-    binary_label_indicators[(no_match_label, no_match_label)] = num_vars
-    num_vars += 1
+    label_indicators[(no_match_label, no_match_label)] = model.add_var(
+        var_type=mip.INTEGER
+    )
+    binary_label_indicators[(no_match_label, no_match_label)] = model.add_var(
+        var_type=mip.BINARY
+    )
 
     # couple integer label indicators to edge indicators
     for label_pair, edges in edges_by_label_pair.items():
-        constraint = pylp.LinearConstraint()
-        constraint.set_coefficient(label_indicators[label_pair], 1)
+        constraint_indicators = []
+        constraint_coefficients = []
+        constraint_indicators.append(label_indicators[label_pair])
+        constraint_coefficients.append(1)
         for edge in edges:
-            constraint.set_coefficient(edge_indicators[edge], -1)
-        constraint.set_relation(pylp.Relation.Equal)
-        constraint.set_value(0)
-        constraints.add(constraint)
+            constraint_indicators.append(edge_indicators[edge])
+            constraint_coefficients.append(-1)
+        model += (
+            mip.xsum(
+                coef * ind
+                for coef, ind in zip(constraint_coefficients, constraint_indicators)
+            )
+            == 0
+        )
 
     # Couple binary label indicators to integer label indicators
     for label_pair, label_indicator in label_indicators.items():
-        constraint1 = pylp.LinearConstraint()
-        constraint1.set_coefficient(binary_label_indicators[label_pair], 1) 
-        constraint1.set_coefficient(label_indicator, -1)
-        constraint1.set_relation(pylp.Relation.LessEqual)
-        constraint1.set_value(0)
+        label_pair_indicator = binary_label_indicators[label_pair]
+        model += label_pair_indicator - label_indicator <= 0
 
-        constraint2 = pylp.LinearConstraint()
         if not label_pair == (no_match_label, no_match_label):
-            constraint2.set_coefficient(binary_label_indicators[label_pair], len(edges_by_label_pair[label_pair]))
-            constraint2.set_coefficient(label_indicator, -1)
-            constraint2.set_relation(pylp.Relation.GreaterEqual)
-            constraint2.set_value(0)
-
-        constraints.add(constraint1)
-        constraints.add(constraint2)
-
+            model += (
+                binary_label_indicators[label_pair]
+                * len(edges_by_label_pair[label_pair])
+                - label_indicator
+                >= 0
+            )
 
     if edge_conflicts is not None:
         for conflict in edge_conflicts:
-            constraint = pylp.LinearConstraint()
+            constraint_indicators = []
             for edge in conflict:
-                constraint.set_coefficient(edge_indicators[tuple(edge)], 1)
-           
-            constraint.set_relation(pylp.Relation.LessEqual)
-            constraint.set_value(1)
-            constraints.add(constraint)
+                constraint_indicators.append(edge_indicators[tuple(edge)])
+
+            model += mip.xsum(ind for ind in constraint_indicators) <= 1
 
     # pin binary no-match pair indicator to 1
-    constraint = pylp.LinearConstraint()
     no_match_indicator = binary_label_indicators[(no_match_label, no_match_label)]
-    constraint.set_coefficient(no_match_indicator, 1)
-    constraint.set_relation(pylp.Relation.Equal)
-    constraint.set_value(1)
-    constraints.add(constraint)
+    model += no_match_indicator == 1
 
     # set objective
-    objective = pylp.LinearObjective(num_vars)
+    objective_indicators, objective_coefficients = [], []
     for label_pair, indicator in label_indicators.items():
         if not (no_match_label in label_pair):
-            objective.set_coefficient(indicator, len(label_indicators) + 1)
-            objective.set_coefficient(binary_label_indicators[label_pair], -1)
+            objective_indicators.append(indicator)
+            objective_coefficients.append(len(label_indicators) + 1)
+            objective_indicators.append(binary_label_indicators[label_pair])
+            objective_coefficients.append(-1)
 
-    objective.set_sense(pylp.Sense.Maximize)
+    model.objective = mip.xsum(
+        coef * ind for coef, ind in zip(objective_coefficients, objective_indicators)
+    )
 
     # solve
-    logger.debug("Added %d constraints", len(constraints))
-    for i in range(len(constraints)):
-        logger.debug(constraints[i])
-
-    logger.debug("Creating quadratic solver")
-    solver = pylp.create_linear_solver(pylp.Preference.Any)
-    variable_types = pylp.VariableTypeMap()
-    for label_pair, indicator in label_indicators.items():
-        variable_types[indicator] = pylp.VariableType.Integer
+    logger.debug("Added %d constraints", len(model.constrs))
+    for constraint in model.constrs:
+        logger.debug(constraint)
 
     if optimality_gap is not None:
-        solver.set_optimality_gap(optimality_gap, True)
+        model.max_gap = optimality_gap
 
     if time_limit is not None:
-        solver.set_timeout(time_limit)
+        model.max_seconds(time_limit)
 
     logger.debug("Initializing solver with %d variables", num_vars)
-    solver.initialize(num_vars, pylp.VariableType.Binary, variable_types)
-    solver.set_num_threads(1)
-
-    logger.debug("Setting objective")
-    solver.set_objective(objective)
-
-    logger.debug("Setting constraints")
-    solver.set_constraints(constraints)
+    model.threads = 1
 
     logger.debug("Solving...")
-    solution, message = solver.solve()
+    status = model.optimize()
 
-    logger.debug("Solver returned: %s", message)
-    if 'NOT' in message:
-        print("Suboptimal solution found.")
+    if status == mip.OptimizationStatus.OPTIMAL:
+        print("optimal solution cost {} found".format(model.objective_value))
+    elif status == mip.OptimizationStatus.FEASIBLE:
+        print(
+            "sol.cost {} found, best possible: {}".format(
+                model.objective_value, model.objective_bound
+            )
+        )
+    elif status == mip.OptimizationStatus.NO_SOLUTION_FOUND:
+        print(
+            "no feasible solution found, lower bound is: {}".format(
+                model.objective_bound
+            )
+        )
 
     # get label matches
-    total_value = 0
     label_matches = []
     for label_pair, label_indicator in binary_label_indicators.items():
         if True:
-            if solution[label_indicator] > 0.5:
+            if label_indicator > 0.5:
                 label_matches.append(label_pair)
 
     # get node matches
     node_matches = [
-        e
-        for e in edges_xy
-        if solution[edge_indicators[e]] > 0.5 and no_match_node not in e
+        e for e in edges_xy if edge_indicators[e] > 0.5 and no_match_node not in e
     ]
 
     # get macroscopic errors counts
@@ -351,9 +342,9 @@ def match_components(
     fns = 0
     for label_pair, label_indicator in binary_label_indicators.items():
         if label_pair[0] == no_match_label:
-            fps += (solution[label_indicator] > 0.5)
+            fps += label_indicator > 0.5
         if label_pair[1] == no_match_label:
-            fns += (solution[label_indicator] > 0.5)
+            fns += label_indicator > 0.5
 
     fps -= 1
     fns -= 1
