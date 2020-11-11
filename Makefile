@@ -18,4 +18,4 @@ install-dev:
 
 .PHONY: test
 test:
-	python -m tests -v
+	pytest tests

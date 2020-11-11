@@ -4,7 +4,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 #logging.getLogger('comatch').setLevel(logging.DEBUG)
 
-if __name__ == "__main__":
+def test_match():
 
     nodes_x = list(range(1, 8))
     nodes_y = list(range(101, 111))
